@@ -2,4 +2,4 @@
 
 Interactive table created with the reactable package displaying the team ratings and stats of every NFL team from the 2019 season.
 
-![Full Table](full table.png)
+![Full Table](FullTable.png)
