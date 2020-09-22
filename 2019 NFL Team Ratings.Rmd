@@ -198,7 +198,7 @@ table <-
           cell = function(value) {
             ### Normalize team rating in order to assign color from color palette
             normalized <-
-              (value - min(NFL_table_clean$SRS)) / (max(NFL_table_clean$SRS) - min(NFL_table_clean$SRS))
+              (value - min(NFL_table_clean$OSRS)) / (max(NFL_table_clean$OSRS) - min(NFL_table_clean$OSRS))
             color <- off_rating_color(normalized)
             value <- format(value, nsmall = 1, digits = 1)
             ### Round corners of cell
@@ -212,7 +212,7 @@ table <-
           cell = function(value) {
           ### Normalize team rating in order to assign color from color palette
             normalized <-
-              (value - min(NFL_table_clean$SRS)) / (max(NFL_table_clean$SRS) - min(NFL_table_clean$SRS))
+              (value - min(NFL_table_clean$DSRS)) / (max(NFL_table_clean$DSRS) - min(NFL_table_clean$DSRS))
             color <- off_rating_color(normalized)
             value <- format(value, nsmall = 1, digits = 1)
             ### Round corners of cell
