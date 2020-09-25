@@ -1,0 +1,513 @@
+---
+title: '2020 RStudio Table Contest Submission'
+author: "Kyle Cuilla"
+date: "9/19/2020"
+output: html_document
+---
+
+```{r setup, warnings = FALSE, message = FALSE, include = FALSE}
+knitr::opts_chunk$set(warnings = FALSE, message = FALSE, echo = FALSE)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(htmltools)
+library(htmlwidgets)
+library(reactable)
+```
+
+```{r data, echo = FALSE}
+url <- "https://www.pro-football-reference.com/years/2019/"
+
+### Get AFC conference table from pro-football-reference site
+AFC_table <- url %>%
+  xml2::read_html() %>%
+  html_nodes(xpath = '//*[@id="AFC"]') %>%
+  html_table()
+
+AFC_table <- AFC_table[[1]]
+
+### Get NFC conference table from pro-football-reference site
+NFC_table <- url %>%
+  xml2::read_html() %>%
+  html_nodes(xpath = '//*[@id="NFC"]') %>%
+  html_table()
+
+NFC_table <- NFC_table[[1]]
+
+### Combine AFC and NFC tables together
+NFL_table <- rbind(AFC_table, NFC_table)
+
+NFL_table_clean <- NFL_table %>%
+  ### Create NFL divisions column
+  mutate(Division = ifelse(str_detect(Tm, "FC"), Tm, NA)) %>%
+  fill(Division, .direction = "down") %>%
+  ### Remove team division names from Tm column
+  filter(str_detect(Tm, "FC", negate = TRUE)) %>%
+  ### Add column to say if team made playoffs based off of pre-existing asterisks
+  mutate(Playoffs = ifelse(str_detect(Tm, "[*+]"), "Yes", "No")) %>%
+  ### Remove asterisks and plus signs next to team names
+  mutate(Tm = gsub("[*+]", "", Tm)) %>%
+  rename(Record = `W-L%`) %>%
+  ### Convert W, L, T into one column named "Record"
+  unite(Record, W, L, T, sep = "-") %>%
+  ### Extract team name
+  mutate(Team = word(Tm, -1)) %>% 
+  mutate(
+    Team = case_when(
+      Team == "Redskins" ~ "Washington",
+      TRUE ~ Team
+    )
+  ) %>%
+  ### Convert columns containing numbers from character to numeric
+  mutate_at(c("SRS", "OSRS", "DSRS", "PF", "PA", "MoV", "SoS"),
+            as.numeric) %>%
+  ### Rank SoS column from 1 to 4 with 1 containing the lowest values and 4 containing the highest
+  mutate(SoS_rating = ntile(SoS, 4)) %>% 
+  select(
+    Division,
+    Team,
+    Record,
+    Playoffs,
+    SoS_rating,
+    PF,
+    PA,
+    MoV,
+    OSRS,
+    DSRS,
+    SRS,
+  )
+```
+
+```{r table, echo = FALSE}
+### Horizontal bar chart to display points scored and points against
+bar_chart <-
+  function(label,
+           width = "100%",
+           height = "13px",
+           fill = "#00bfc4",
+           background = NULL) {
+    bar <-
+      div(style = list(
+        background = fill,
+        width = width,
+        height = height
+      ))
+    chart <-
+      div(style = list(
+        flexGrow = 1,
+        marginLeft = "8px",
+        background = background
+      ),
+      bar)
+    div(style = list(display = "flex", alignItems = "center"), label, chart)
+  }
+
+### Create orange-blue color palette for Team Rating SRS columns
+make_color_pal <- function(colors, bias = 1) {
+  get_color <- colorRamp(colors, bias = bias)
+  function(x)
+    rgb(get_color(x), maxColorValue = 255)
+}
+
+off_rating_color <-
+  make_color_pal(c("#67a9cf", "#f8fcf8", "#ef8a62"), bias = 1.3)
+def_rating_color <-
+  make_color_pal(c("#67a9cf", "#f8fcf8", "#ef8a62"), bias = 0.8)
+
+team_rating_column <- function(maxWidth = 55, ...) {
+  colDef(
+    maxWidth = maxWidth,
+    align = "right",
+    class = "cell number",
+    headerStyle = list(fontWeight = "500"),
+    ...
+  )
+}
+
+table <-
+    reactable(
+      NFL_table_clean,
+      pagination = FALSE,
+      showSortIcon = FALSE,
+      highlight = TRUE,
+      compact = TRUE,
+      defaultSorted = "Playoffs",
+      defaultSortOrder = "desc",
+      defaultColDef = colDef(headerClass = "header colheader"),
+      columnGroups = list(
+        colGroup(
+          name = "Team Rating (SRS)",
+          columns = c("SRS", "OSRS", "DSRS"),
+          headerClass = "groupheader"
+        ),
+        colGroup(
+          name = "Team Scoring & Margin of Victory",
+          columns = c("PF", "PA", "MoV"),
+          headerClass = "groupheader"
+        )
+      ),
+      # Add border between Divisions when sorting by Division
+      rowClass = JS("
+        function(rowInfo, state) {
+          const firstSorted = state.sorted[0]
+          if (firstSorted && firstSorted.id === 'Division') {
+            const nextRow = state.pageRows[rowInfo.viewIndex + 1]
+            if (nextRow && rowInfo.row.Division !== nextRow.Division) {
+              return 'Division-last'
+            }
+          }
+        }"
+      ),
+      columns = list(
+        Division = colDef(
+          class = "division-name cell",
+          maxWidth = 90,
+          ### Group teams into divisions when sorting by division - if sorting by other column then ungroup
+          style = JS("function(rowInfo, colInfo, state) {
+        var firstSorted = state.sorted[0]
+        if (!firstSorted || firstSorted.id === 'Division') {
+          var prevRow = state.pageRows[rowInfo.viewIndex - 1]
+        }
+      }")),
+      Team = colDef(
+        minWidth = 145,
+        class = "cell",
+        cell = function(value, index) {
+          ### Team logos from images folder
+          img_src <- knitr::image_uri(sprintf("images/%s.png", value))
+          image <- img(class = "logo",
+                     src = img_src,
+                     alt = value)
+          div(class = "team", image,
+            ### Team name
+            div(class = "team-name", value),
+            ### Team record
+            div(class = "record",  sprintf("(%s)", NFL_table_clean[index, "Record"])))
+      }
+    ), 
+        ### Hide separate record column
+        Record = colDef(show = FALSE),
+        SRS = team_rating_column(
+          name = "Total",
+          cell = function(value) {
+            ### Normalize team rating in order to assign color from color palette
+            normalized <-
+              (value - min(NFL_table_clean$SRS)) / (max(NFL_table_clean$SRS) - min(NFL_table_clean$SRS))
+            color <- off_rating_color(normalized)
+            value <- format(value, nsmall = 1, digits = 1)
+            ### Round corners of cell
+            div(class = "roundcorners",
+                style = list(background = color),
+                value)
+          }
+        ),
+        OSRS = team_rating_column(
+          name = "Off.",
+          cell = function(value) {
+            ### Normalize team rating in order to assign color from color palette
+            normalized <-
+              (value - min(NFL_table_clean$OSRS)) / (max(NFL_table_clean$OSRS) - min(NFL_table_clean$OSRS))
+            color <- off_rating_color(normalized)
+            value <- format(value, nsmall = 1, digits = 1)
+            ### Round corners of cell
+            div(class = "roundcorners",
+                style = list(background = color),
+                value)
+          }
+        ),
+        DSRS = team_rating_column(
+          name = "Def.",
+          cell = function(value) {
+          ### Normalize team rating in order to assign color from color palette
+            normalized <-
+              (value - min(NFL_table_clean$DSRS)) / (max(NFL_table_clean$DSRS) - min(NFL_table_clean$DSRS))
+            color <- off_rating_color(normalized)
+            value <- format(value, nsmall = 1, digits = 1)
+            ### Round corners of cell
+            div(class = "roundcorners",
+                style = list(background = color),
+                value)
+          }
+        ),
+        PF = colDef(
+          name = "Points Scored",
+          align = "left",
+          ### Add column border to left side of column
+          class = "border-left cell number",
+          headerStyle = list(fontWeight = "500"),
+          cell = function(value) {
+            ### Calculate width of bar color to display
+            width <- paste0(value / max(NFL_table_clean$PF) * 100, "%")
+            bar_chart(value,
+                      width = width,
+                      fill = "#ef8a62",
+                      background = "#e1e1e1")
+          }
+        ),
+        PA = colDef(
+          name = "Points Against",
+          align = "left",
+          class = "cell number",
+          headerStyle = list(fontWeight = "500"),
+          cell = function(value) {
+            ### Calculate width of bar color to display
+            width <- paste0(value / max(NFL_table_clean$PA) * 100, "%")
+            bar_chart(value,
+                      width = width,
+                      fill = "#ef8a62",
+                      background = "#e1e1e1")
+          }
+        ),
+        MoV = colDef(
+          maxWidth = 55,
+          ### Add column border to right side of column
+          class = "cell number border-right ",
+          headerStyle = list(fontWeight = "500"),
+          ### For any positive number, add "+" sign. For any negative number leave as is
+          cell = function(value) {
+            if (value > 0)
+              paste0("+", value)
+            else
+              value
+          },
+          ### For any positive number, assign green color. For any negative number assign red color
+          style = function(value) {
+            if (value > 0) {
+              color <- "#008000"
+            } else if (value < 0) {
+              color <- "#e00000"
+            } else {
+              color <- "#777"
+            }
+            list(color = color)
+          }
+        ),
+        SoS_rating = colDef(
+          name = "SoS",
+          align = "center",
+          maxWidth = 65,
+          class = "cell number border-left",
+          cell = function(value) {
+          ### For teams that were assigned a SoS_rating of 4 (highest rating), show a double-black diamond (note: there was no diamond icon available in the Font Awesome Free library, so the solution was to use a square icon and rotate it at a 45 degree angle)
+            if (value == 4) {
+              ### In order to display two icons in the same column, they need to be placed in a list
+              list(tagAppendAttributes(shiny::icon("square", class = "rotate")),
+                   tagAppendAttributes(shiny::icon("square", class = "rotate")))
+              ### For teams that were assigned a SoS_rating of 3, show a single black diamond
+            } else if (value == 3) {
+              tagAppendAttributes(shiny::icon("square", class = "rotate"))
+              ### For teams that were assigned a SoS_rating of 2, show a blue square
+            } else if (value == 2) {
+              tagAppendAttributes(shiny::icon("square"))
+            } else {
+              ### For teams that were assigned a SoS_rating of 1, show a green circle
+              tagAppendAttributes(shiny::icon("circle"))
+            }
+          },
+          style = function(value) {
+            ### Assign colors to icons
+            if (value %in% c(3, 4)) {
+              color <- "black"
+            } else if (value == 2) {
+              color <- "blue"
+            } else {
+              color <- "green"
+            }
+            list(color = color)
+          }
+        ),
+        Playoffs = colDef(
+          maxWidth = 75,
+          align = "center",
+          class = "cell number border-left",
+          ### If team made the playoffs in 2019, assign a green check mark. If they did not, assign a red X symbol
+          cell = function(value) {
+            if (value == "Yes")
+              tagAppendAttributes(shiny::icon("check"))
+            else
+              tagAppendAttributes(shiny::icon("times"))
+          },
+          ### Assign colors to icons
+          style = function(value) {
+            if (value == "Yes") {
+              color <- "green"
+            } else {
+              color <- "red"
+            }
+            list(color = color)
+          }
+        )
+      )
+    )
+
+### Add title and subtitle to top of page above table
+div(class = "team-ratings",
+    div(class = "title",
+        h2("2019 NFL Team Rating & Stats"),
+        "Ratings and results from every NFL team from the 2019 season"),
+  table,
+  ### Add legend and source below the table
+  tags$span(
+    style = "color:#777",
+    "Note: Strength of Schedule (SoS) aligns with the ski trail difficulty rating system:", 
+    ### In order to display icons with color, needed to create a new css class for the symbols that contained a color option
+    tagAppendAttributes(shiny::icon("circle", class = "green-circle-legend")), "= Easy",
+    tagAppendAttributes(shiny::icon("square", class = "blue-square-legend")), "= Moderate",  
+    tagAppendAttributes(shiny::icon("square", class = "black-diamond-legend1")), "= Difficult", 
+    list(tagAppendAttributes(shiny::icon("square", class = "black-diamond-legend1")),
+                   tagAppendAttributes(shiny::icon("square", class = "black-diamond-legend2"))), "= Most Difficult",
+    div(
+    "Table created by: Kyle Cuilla @kc_analytics  •  Data: Pro-Football-Reference.com")
+  )
+)
+```
+
+```{r}
+### Load font from Google Fonts
+tags$link(href = "https://fonts.googleapis.com/css?family=Karla:400,700|Fira+Mono&display=fallback", rel = "stylesheet")
+```
+
+```{css}
+/* Row and column borders */
+.cell {
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.07);
+}
+
+.border-left {
+  border-left: 1px solid #777;
+}
+
+.border-right {
+  border-right: 1px solid #777;
+}
+
+.Division-last .cell {
+  box-shadow: inset 0 -1px 0 #777;
+}
+
+
+/* Column header hover formatting */
+.header:hover,
+.header[aria-sort="ascending"],
+.header[aria-sort="descending"] {
+  background-color: #b3b3b3;
+  color: #fff;
+}
+
+.header:active,
+.header[aria-sort="ascending"],
+.header[aria-sort="descending"] {
+  background-color: #555;
+  color: #fff;
+}
+
+
+/* Column header formatting */
+.colheader {
+  font-family: "Open Sans", sans-serif;
+  font-size: 15px;
+  border-bottom: 2px solid #555;
+}
+
+.groupheader {
+  font-family: "Open Sans", sans-serif;
+  font-size: 15px;
+}
+
+
+/* Number formatting */
+.number {
+  font-family: "Fira Mono", Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 30px;
+  white-space: pre;
+}
+
+/* Text formatting */
+.team-ratings {
+  font-family: Karla, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 12px;
+}
+
+
+/* Division column formatting */
+.division-name {
+  font-family: Karla, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 30px;
+}
+
+
+/* Team column formatting */
+.team {
+  display: flex;
+  align-items: baseline;
+}
+
+.logo {
+  margin-right: 10px;
+  height: 24px;
+}
+
+.team-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.record {
+  margin-left: 4px;
+  color: #999;
+  font-size: 13px;
+}
+
+
+/* Rotate SoS square into a diamond */
+.rotate{
+  transform: rotate(45deg);
+}
+
+
+/* Round corners under Team Rating columns */
+.roundcorners {
+  border-radius: 10px;
+  color: #000;
+  padding-bottom: 2px;
+  padding-right: 2px;
+  width: 46px;
+  height: 28px;
+}
+
+
+/* Formatting for title above table */
+.title {
+  font-family: "Open Sans", sans-serif;
+  font-size: 16px;
+  margin: 16px 0;
+}
+
+
+/* SoS legend symbols underneath chart */
+.black-diamond-legend1{
+  transform: rotate(45deg);
+  color: #000;
+  margin-left: 7px;
+}
+
+.black-diamond-legend2{
+  transform: rotate(45deg);
+  color: #000;
+}
+
+.green-circle-legend{
+  color: #008000;
+  margin-left: 7px;
+}
+
+.blue-square-legend{
+  color: #0000FF;
+  margin-left: 7px;
+}
+```
+
+
