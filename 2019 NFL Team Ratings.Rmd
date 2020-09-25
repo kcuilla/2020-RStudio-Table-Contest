@@ -132,7 +132,7 @@ table <-
       showSortIcon = FALSE,
       highlight = TRUE,
       compact = TRUE,
-      defaultSorted = "Playoffs",
+      defaultSorted = "SRS",
       defaultSortOrder = "desc",
       defaultColDef = colDef(headerClass = "header colheader"),
       columnGroups = list(
